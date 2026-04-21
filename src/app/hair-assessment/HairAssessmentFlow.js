@@ -1085,6 +1085,7 @@ const AiAnalysisView = ({ sessionId, subStep, setSubStep, onBack, onNext, userPr
   });
   const [isTriggering, setIsTriggering] = useState(false);
   const [skipPhotosForGeneration, setSkipPhotosForGeneration] = useState(false);
+  const [showValidationErrors, setShowValidationErrors] = useState(false);
 
   const [uploadProgress, setUploadProgress] = useState({
     P01: false,
@@ -1105,32 +1106,48 @@ const AiAnalysisView = ({ sessionId, subStep, setSubStep, onBack, onNext, userPr
     if (file) {
       // Show local preview immediately
       const preview = URL.createObjectURL(file);
-      setUploadedPhotos(prev => ({ ...prev, [key]: preview }));
-
-      // PHASE 3: Multipart upload
-      try {
-        setUploadProgress(prev => ({ ...prev, [key]: 'uploading' }));
-        const response = await dispatch(uploadImageThunk({ sessionId, photoId: key, file })).unwrap();
-        if (response.success) {
-          setUploadProgress(prev => ({ ...prev, [key]: 'done' }));
-        } else {
-          setUploadProgress(prev => ({ ...prev, [key]: 'error' }));
-          toast.error(`Failed to upload ${key} view properly`);
-        }
-      } catch (err) {
-        console.error("Upload error:", err);
-        setUploadProgress(prev => ({ ...prev, [key]: 'error' }));
-      }
+      setUploadedPhotos(prev => ({ ...prev, [key]: { file, preview } }));
+      if (showValidationErrors) setShowValidationErrors(false);
     }
   };
 
   const handleTrigger = async (skip = false) => {
+    if (!skip && !canAnalyze) {
+      setShowValidationErrors(true);
+      toast.error("Please upload all required photos before analysis.");
+      return;
+    }
+
     try {
       setIsTriggering(true);
       if (!sessionId) {
         toast.error('Session missing. Please complete the questionnaire again.');
         onBack();
         return;
+      }
+
+      // 1. Upload photos first if not skipping
+      if (!skip) {
+        const uploadPromises = Object.keys(uploadedPhotos).map(async (key) => {
+          const photoData = uploadedPhotos[key];
+          if (photoData && photoData.file) {
+            try {
+              setUploadProgress(prev => ({ ...prev, [key]: 'uploading' }));
+              const response = await dispatch(uploadImageThunk({ sessionId, photoId: key, file: photoData.file })).unwrap();
+              if (response.success) {
+                setUploadProgress(prev => ({ ...prev, [key]: 'done' }));
+              } else {
+                setUploadProgress(prev => ({ ...prev, [key]: 'error' }));
+                throw new Error(`Failed to upload ${key}`);
+              }
+            } catch (err) {
+              setUploadProgress(prev => ({ ...prev, [key]: 'error' }));
+              throw err;
+            }
+          }
+        });
+
+        await Promise.all(uploadPromises);
       }
 
       const statusResponse = await dispatch(checkSessionStatusThunk(sessionId)).unwrap();
@@ -1186,6 +1203,7 @@ const AiAnalysisView = ({ sessionId, subStep, setSubStep, onBack, onNext, userPr
   const countRequired = requiredPhotoKeys.map((key) => uploadedPhotos[key]).filter(Boolean).length;
   const totalUploaded = allPhotoKeys.map((key) => uploadedPhotos[key]).filter(Boolean).length;
   const canAnalyze = countRequired === totalRequired;
+  const missingKeys = requiredPhotoKeys.filter(key => !uploadedPhotos[key]);
 
   if (subStep === 'upload') {
     return (
@@ -1229,35 +1247,45 @@ const AiAnalysisView = ({ sessionId, subStep, setSubStep, onBack, onNext, userPr
               label="Front Hairline View"
               status="Required"
               icon={<FrontViewIcon />}
-              previewUrl={uploadedPhotos.P01}
+              previewUrl={uploadedPhotos.P01?.preview}
               onDelete={() => handleDeletePhoto('P01')}
               onUpload={(file) => handleUploadPhoto('P01', file)}
+              showError={showValidationErrors && !uploadedPhotos.P01}
             />
             <UploadCardMain
               label="Top / Crown View"
               status="Required"
               icon={<TopViewIcon />}
-              previewUrl={uploadedPhotos.P02}
+              previewUrl={uploadedPhotos.P02?.preview}
               onDelete={() => handleDeletePhoto('P02')}
               onUpload={(file) => handleUploadPhoto('P02', file)}
+              showError={showValidationErrors && !uploadedPhotos.P02}
             />
             <UploadCardMain
               label="Left Side Profile"
               status="Required"
               icon={<SideViewLeftIcon />}
-              previewUrl={uploadedPhotos.P03}
+              previewUrl={uploadedPhotos.P03?.preview}
               onDelete={() => handleDeletePhoto('P03')}
               onUpload={(file) => handleUploadPhoto('P03', file)}
+              showError={showValidationErrors && !uploadedPhotos.P03}
             />
             <UploadCardMain
               label="Right Side Profile"
               status="Optional"
               icon={<SideViewRightIcon />}
-              previewUrl={uploadedPhotos.P04}
+              previewUrl={uploadedPhotos.P04?.preview}
               onDelete={() => handleDeletePhoto('P04')}
               onUpload={(file) => handleUploadPhoto('P04', file)}
             />
           </div>
+
+          {showValidationErrors && missingKeys.length > 0 && (
+            <div className="ai-validation-error-banner">
+              <FaInfoCircle />
+              <span>Please upload the required photos highlight in red to continue.</span>
+            </div>
+          )}
 
           <div className="ai-requirements-section">
             <div className="req-header-row">
@@ -1286,11 +1314,11 @@ const AiAnalysisView = ({ sessionId, subStep, setSubStep, onBack, onNext, userPr
 
           <div className="ai-action-footer">
             <button
-              className={`analyze-action-btn ${canAnalyze && !isTriggering ? 'active' : ''}`}
-              onClick={() => canAnalyze ? handleTrigger(false) : toast.warning("Please upload required photos")}
-              disabled={!canAnalyze || isTriggering}
+              className={`analyze-action-btn ${(canAnalyze || isTriggering) ? 'active' : ''}`}
+              onClick={() => handleTrigger(false)}
+              disabled={isTriggering}
             >
-              {isTriggering ? 'Starting...' : 'Analyze Photos'} <SparklesIcon />
+              {isTriggering ? 'Analyzing...' : 'Analyze Photos'} <SparklesIcon />
             </button>
             <button className="skip-btn-lg" onClick={() => handleTrigger(true)} disabled={isTriggering}>
               Skip Photo Analysis
@@ -1850,36 +1878,21 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
   const [generationStatus, setGenerationStatus] = React.useState('INITIALIZING');
   const [isVerifyingOtp, setIsVerifyingOtp] = React.useState(false);
   const [otpError, setOtpError] = React.useState('');
-  const [email, setEmail] = useState('');
-  const [city, setCity] = useState('');
   const [consents, setConsents] = useState({
     privacy: true,
     contact: true
   });
   const [isCreatingLead, setIsCreatingLead] = useState(false);
-  const [formErrors, setFormErrors] = useState({ email: '', city: '' });
+  const [userInfo, setUserInfo] = useState(() => {
+    const savedName = userProfile?.name || userProfile?.fullName || (typeof window !== 'undefined' ? localStorage.getItem('user_full_name') : '') || '';
+    const savedPhone = userProfile?.phone || (typeof window !== 'undefined' ? localStorage.getItem('user_phone') : '') || '';
+    return { name: savedName, phone: savedPhone };
+  });
+  const [email, setEmail] = useState(() => userProfile?.email || (typeof window !== 'undefined' ? localStorage.getItem('user_email') : '') || '');
+  const [city, setCity] = useState(() => userProfile?.city || (typeof window !== 'undefined' ? localStorage.getItem('user_city') : '') || '');
+  const [formErrors, setFormErrors] = useState({});
   const [showFormErrors, setShowFormErrors] = useState(false);
   const completeData = null;
-
-  // Get auto-filled data from previous steps if possible
-  const [userInfo, setUserInfo] = useState({
-    name: '',
-    phone: ''
-  });
-
-  useEffect(() => {
-    // Prefer profile passed from Step 1; fallback to localStorage.
-    const savedName =
-      userProfile?.fullName ||
-      userProfile?.name ||
-      localStorage.getItem('user_full_name') ||
-      '';
-    const savedPhone =
-      userProfile?.phone ||
-      localStorage.getItem('user_phone') ||
-      '';
-    setUserInfo({ name: savedName, phone: savedPhone });
-  }, [userProfile]);
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1913,32 +1926,25 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
   };
 
   const handleLeadSubmit = async () => {
-    const fallbackEmail = localStorage.getItem('user_email') || localStorage.getItem('hair_assessment_email') || '';
-    const fallbackCity = localStorage.getItem('user_city') || localStorage.getItem('hair_assessment_city') || '';
-    const fallbackPhone = localStorage.getItem('user_phone') || '';
-    const resolvedName = (userInfo.name || userProfile?.fullName || userProfile?.name || localStorage.getItem('user_full_name') || 'User').trim();
-    const resolvedPhone = (userInfo.phone || userProfile?.phone || fallbackPhone || '').trim();
-    const resolvedEmail = (email || fallbackEmail || `${resolvedPhone || 'user'}@hairsncare.app`).trim();
-    const resolvedCity = (city || fallbackCity || 'NA').trim();
-
-    let errors = { email: '', city: '' };
-    let hasErr = false;
-
-    if (!email) { errors.email = "Email is required"; hasErr = true; }
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errors.email = "Invalid email format"; hasErr = true; }
-
-    if (!city) { errors.city = "City is required"; hasErr = true; }
-
-    if (!resolvedPhone) {
-      toast.error("Phone number missing. Please restart the assessment.");
-      return;
+    const errors = {};
+    if (!userInfo.name.trim()) errors.name = 'Name is required';
+    if (!userInfo.phone.trim()) errors.phone = 'Mobile number is required';
+    
+    // Email is optional, but if entered, should be valid
+    if (email && !/\S+@\S+\.\S+/.test(email)) {
+      errors.email = 'Please enter a valid email address';
     }
 
-    if (hasErr) {
+    if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
       setShowFormErrors(true);
       return;
     }
+
+    const resolvedName = userInfo.name.trim();
+    const resolvedPhone = userInfo.phone.trim();
+    const resolvedEmail = email.trim() || `${resolvedPhone}@hairsncare.app`;
+    const resolvedCity = city.trim() || 'NA';
 
     if (!consents.privacy) {
       toast.warning("Please accept the privacy policy to continue.");
@@ -1954,8 +1960,8 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
         email: resolvedEmail,
         city: resolvedCity,
         sessionId: sessionId,
-        consentPrivacyPolicy: consents.privacy,
-        consentToContact: consents.contact
+        consentPrivacyPolicy: true,
+        consentToContact: true
       })).unwrap();
 
       if (leadResponse.success) {
@@ -2208,12 +2214,26 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
 
                 <div className="res-input-row">
                   <label>Full Name</label>
-                  <input type="text" placeholder="Your Name" value={userInfo.name} readOnly className="auto-filled-input" />
+                  <input 
+                    type="text" 
+                    placeholder="Your Name" 
+                    value={userInfo.name}
+                    onChange={(e) => setUserInfo(prev => ({ ...prev, name: e.target.value }))}
+                    className={(showFormErrors && formErrors.name) ? 'input-error' : ''}
+                  />
+                  {showFormErrors && formErrors.name && <span className="field-error-msg">{formErrors.name}</span>}
                 </div>
 
                 <div className="res-input-row">
                   <label>Mobile Number</label>
-                  <input type="text" placeholder="Your Phone" value={userInfo.phone} readOnly className="auto-filled-input" />
+                  <input 
+                    type="text" 
+                    placeholder="Your Phone" 
+                    value={userInfo.phone}
+                    onChange={(e) => setUserInfo(prev => ({ ...prev, phone: e.target.value }))}
+                    className={(showFormErrors && formErrors.phone) ? 'input-error' : ''}
+                  />
+                  {showFormErrors && formErrors.phone && <span className="field-error-msg">{formErrors.phone}</span>}
                 </div>
 
                 <div className="res-input-row">
@@ -2258,27 +2278,7 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
                   {showFormErrors && formErrors.city && <span className="field-error-msg">{formErrors.city}</span>}
                 </div>
 
-                <div className="res-input-row consent-row">
-                  <label className="checkbox-label-v">
-                    <input
-                      type="checkbox"
-                      checked={consents.privacy}
-                      onChange={(e) => setConsents(prev => ({ ...prev, privacy: e.target.checked }))}
-                    />
-                    <span>I agree to the <a href="/privacy" target="_blank">Privacy Policy</a> and terms of service.</span>
-                  </label>
-                </div>
 
-                <div className="res-input-row consent-row">
-                  <label className="checkbox-label-v">
-                    <input
-                      type="checkbox"
-                      checked={consents.contact}
-                      onChange={(e) => setConsents(prev => ({ ...prev, contact: e.target.checked }))}
-                    />
-                    <span>I consent to be contacted by experts for diagnostic support.</span>
-                  </label>
-                </div>
 
                 <div className="res-security-banner">
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -2371,7 +2371,7 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
   );
 };
 
-const UploadCardMain = ({ label, status, icon, previewUrl, onDelete, onUpload }) => {
+const UploadCardMain = ({ label, status, icon, previewUrl, onDelete, onUpload, showError }) => {
   const fileInputRef = React.useRef(null);
 
   const handleClick = () => {
@@ -2389,7 +2389,10 @@ const UploadCardMain = ({ label, status, icon, previewUrl, onDelete, onUpload })
   };
 
   return (
-    <div className={`ai-upload-item-card ${previewUrl ? 'has-photo' : ''}`} onClick={handleClick}>
+    <div 
+      className={`ai-upload-item-card ${previewUrl ? 'has-photo' : ''} ${showError ? 'has-error' : ''}`} 
+      onClick={handleClick}
+    >
       <input
         type="file"
         ref={fileInputRef}
@@ -2419,6 +2422,7 @@ const UploadCardMain = ({ label, status, icon, previewUrl, onDelete, onUpload })
             <span className="ai-upload-item-label">{label}</span>
             <span className={`ai-upload-item-status ${status.toLowerCase()}`}>{status}</span>
           </div>
+          {showError && <span className="error-msg-under">Photo required</span>}
         </>
       )}
     </div>
