@@ -1197,7 +1197,7 @@ const AiAnalysisView = ({ sessionId, subStep, setSubStep, onBack, onNext, userPr
     }
   };
 
-  const requiredPhotoKeys = ['P01', 'P02', 'P03'];
+  const requiredPhotoKeys = ['P01', 'P02'];
   const allPhotoKeys = ['P01', 'P02', 'P03', 'P04'];
   const totalRequired = requiredPhotoKeys.length;
   const countRequired = requiredPhotoKeys.map((key) => uploadedPhotos[key]).filter(Boolean).length;
@@ -1263,12 +1263,11 @@ const AiAnalysisView = ({ sessionId, subStep, setSubStep, onBack, onNext, userPr
             />
             <UploadCardMain
               label="Left Side Profile"
-              status="Required"
+              status="Optional"
               icon={<SideViewLeftIcon />}
               previewUrl={uploadedPhotos.P03?.preview}
               onDelete={() => handleDeletePhoto('P03')}
               onUpload={(file) => handleUploadPhoto('P03', file)}
-              showError={showValidationErrors && !uploadedPhotos.P03}
             />
             <UploadCardMain
               label="Right Side Profile"
