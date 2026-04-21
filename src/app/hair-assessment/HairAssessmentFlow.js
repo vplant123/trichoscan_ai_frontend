@@ -1893,6 +1893,33 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
   const [showFormErrors, setShowFormErrors] = useState(false);
   const completeData = null;
 
+  useEffect(() => {
+    const checkInitialStatus = async () => {
+      if (!sessionId) return;
+      try {
+        const response = await dispatch(checkSessionStatusThunk(sessionId)).unwrap();
+        const status = String(
+          response?.data?.status ||
+          response?.status ||
+          response?.sessionStatus ||
+          response?.state ||
+          ''
+        ).toUpperCase();
+
+        const isVerified = response?.data?.isVerified || response?.isVerified;
+
+        if (['REPORT_COMPLETE', 'COMPLETED', 'ANALYSIS_COMPLETE'].includes(status) && isVerified) {
+          toast.success('Report is ready. Redirecting...');
+          navigate(`/report?sessionId=${sessionId}`, { replace: true });
+        }
+      } catch (err) {
+        console.error("Initial results check failed:", err);
+      }
+    };
+
+    checkInitialStatus();
+  }, [sessionId, dispatch, router]);
+
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const pollUntilReportComplete = async () => {
@@ -1910,7 +1937,7 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
       const normalizedStatus = String(rawStatus).toUpperCase();
       setGenerationStatus(normalizedStatus);
 
-      if (['REPORT_COMPLETE', 'COMPLETED'].includes(normalizedStatus)) {
+      if (['REPORT_COMPLETE', 'COMPLETED', 'ANALYSIS_COMPLETE'].includes(normalizedStatus)) {
         return true;
       }
 
