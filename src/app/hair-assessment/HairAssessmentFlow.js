@@ -13,11 +13,12 @@ import {
   updateAnswersThunk,
   triggerAnalysisThunk,
   checkSessionStatusThunk,
-  createLeadThunk,
   finalizeQuizThunk,
   uploadImageThunk,
-  verifyOtpThunk,
+  authUserThunk,
+  saveLeadThunk,
 } from '@/redux/slices/hairAssessmentSlice';
+import { useAuth } from '@/context/AuthContext';
 
 const normalizeText = (val) => String(val ?? '').trim().toLowerCase();
 const normalizeRuleId = (ruleId) => String(ruleId ?? '').trim().toUpperCase().replace(/_/g, '-');
@@ -26,24 +27,6 @@ const isSuccessResponse = (value) => {
 };
 const normalizeQuestionId = (questionId) => String(questionId ?? '').trim().toUpperCase();
 
-const parseListLikeValue = (value) => {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string') return [value];
-
-  const clean = value.trim();
-  if (!(clean.includes(',') || (clean.startsWith('[') && clean.endsWith(']')))) {
-    return [clean];
-  }
-
-  const inner = clean.startsWith('[') && clean.endsWith(']')
-    ? clean.substring(1, clean.length - 1)
-    : clean;
-
-  return inner
-    .split(',')
-    .map(v => v.trim().replace(/^['"]|['"]$/g, ''))
-    .filter(Boolean);
-};
 
 const getComparableTokens = (value) => {
   const values = Array.isArray(value) ? value : [value];
@@ -65,15 +48,6 @@ const getComparableTokens = (value) => {
   return tokens;
 };
 
-const answerMatches = (answers, questionId, expectedValues) => {
-  const userTokens = getComparableTokens(answers?.[questionId]);
-  if (!userTokens.size) return false;
-
-  return expectedValues.some((expected) => {
-    const expectedTokens = getComparableTokens(expected);
-    return Array.from(expectedTokens).some((token) => userTokens.has(token));
-  });
-};
 
 /* =========================================================
    NEW BRANCHING LOGIC ENGINE (DSE ALIGNED)
@@ -114,7 +88,7 @@ const BRANCHING_RULES = [
     id: "BR_006_SOUTH_ASIAN",
     description: "Activate region-specific questions",
     trigger: (answers) => answers["Q_S01_003"] === "south_asian",
-    activates: [] 
+    activates: []
   },
   {
     id: "BR_007_PATERNAL_GENETIC",
@@ -132,7 +106,7 @@ const BRANCHING_RULES = [
 
 function getActiveQuestions(answers) {
   const activeQuestionIds = new Set();
-  
+
   // Normalize all keys in answers for reliable trigger evaluation
   const normalizedAnswers = {};
   Object.keys(answers).forEach(k => {
@@ -149,17 +123,6 @@ function getActiveQuestions(answers) {
   return Array.from(activeQuestionIds);
 }
 
-function validateActivePath(ruleId, answers) {
-  const rule = BRANCHING_RULES.find(r => normalizeRuleId(r.id) === normalizeRuleId(ruleId));
-  if (!rule) return false;
-  
-  const normalizedAnswers = {};
-  Object.keys(answers).forEach(k => {
-    normalizedAnswers[normalizeQuestionId(k)] = answers[k];
-  });
-  
-  return rule.trigger(normalizedAnswers);
-}
 
 /* Shared Shield Icon */
 const ShieldIcon = () => (
@@ -170,15 +133,6 @@ const ShieldIcon = () => (
   </svg>
 );
 
-const PhotoSecureIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M22 13V9C22 4 20 2 15 2H9C4 2 2 4 2 9V15C2 20 4 22 9 22H13.5" stroke="#0ED7B5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M22 17.5V18.5C22 20.43 20.43 22 18.5 22C16.57 22 15 20.43 15 18.5V17.5C15 17.22 15.22 17 15.5 17H21.5C21.78 17 22 17.22 22 17.5Z" stroke="#0ED7B5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M17 17V16C17 15.17 17.67 14.5 18.5 14.5C19.33 14.5 20 15.17 20 16V17" stroke="#0ED7B5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M10.5 8C10.5 9.38 9.38 10.5 8 10.5C6.62 10.5 5.5 9.38 5.5 8C5.5 6.62 6.62 5.5 8 5.5C9.38 5.5 10.5 6.62 10.5 8Z" stroke="#0ED7B5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M2.67 18.95L7.6 15.64C8.39 15.11 9.53 15.17 10.24 15.78L10.57 16.07C11.35 16.74 12.61 16.74 13.39 16.07" stroke="#0ED7B5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
 
 const HairAssessmentFlow = () => {
   const router = useRouter();
@@ -311,7 +265,7 @@ const HairAssessmentFlow = () => {
     // Always calculate new visible ids
     const visibleIds = getVisibleQuestionIds(finalNextOptions);
     const cleanedOptions = {};
-    
+
     Object.keys(finalNextOptions).forEach(id => {
       if (visibleIds.has(id)) {
         cleanedOptions[id] = finalNextOptions[id];
@@ -322,18 +276,11 @@ const HairAssessmentFlow = () => {
     setSelectedOptions(finalNextOptions);
   };
 
-  const getQuestionById = (qId) => {
-    for (const section of sections) {
-      const found = section.questions?.find(q => q.id === qId);
-      if (found) return found;
-    }
-    return null;
-  };
 
   const getVisibleQuestionIds = (currentOptions) => {
     const visibleIds = new Set();
     const activeFromRules = new Set(getActiveQuestions(currentOptions));
-    
+
     // 1. Inject (hiddenQuestions) mapping from API
     const allConditionalIds = new Set(
       hiddenQuestions.map(q => {
@@ -355,14 +302,14 @@ const HairAssessmentFlow = () => {
       section.questions.forEach(q => {
         const qIdRaw = q.id;
         const qIdNormalized = normalizeQuestionId(qIdRaw);
-        
+
         // A question is visible if:
         // 1. It is NOT conditional (checked via API flag, local inject list, or local rule set)
         // 2. OR it is explicitly activated by a currently triggered rule
-        const isConditional = q.isConditional === true || 
-                             !!q.conditional || 
-                             allConditionalIds.has(qIdNormalized) ||
-                             ruleGatedIds.has(qIdNormalized);
+        const isConditional = q.isConditional === true ||
+          !!q.conditional ||
+          allConditionalIds.has(qIdNormalized) ||
+          ruleGatedIds.has(qIdNormalized);
 
         if (!isConditional || activeFromRules.has(qIdNormalized)) {
           visibleIds.add(qIdRaw);
@@ -408,11 +355,6 @@ const HairAssessmentFlow = () => {
     return val !== undefined && val !== '';
   }).length + profileAnsweredCount;
 
-  const totalAnswered = displayedQuestions.filter(q => {
-    const val = selectedOptions[q.id];
-    if (q.type === 'MULTI_SELECT') return val && val.length > 0;
-    return val !== undefined && val !== '';
-  }).length + profileAnsweredCount;
 
   const handleUserInfoChange = (e) => {
     const { name, value } = e.target;
@@ -812,7 +754,7 @@ const HairAssessmentFlow = () => {
 
 /* Components */
 
-const SectionHero = ({ num, sectionLabel, title, subtitle }) => (
+const SectionHero = ({ sectionLabel, title, subtitle }) => (
   <div className="section-hero">
     <div className="hero-accent-line"></div>
     <div className="hero-circle">
@@ -827,7 +769,7 @@ const SectionHero = ({ num, sectionLabel, title, subtitle }) => (
 );
 
 const DynamicQuestionCard = ({ index, question, selectedValue, onSelect, showError }) => {
-  const { id, text, type, options, min, max, mandatory, imageUrl } = question;
+  const { text, type, options, min, max, mandatory } = question;
 
   const isSelected = (option) => {
     const candidateValues = [option?.value, option?.id].map(normalizeText).filter(Boolean);
@@ -1023,9 +965,9 @@ const ZoneReferenceGuide = ({ highlightedZone }) => {
               'crown': '/crownzone.png'
             };
             return (
-              <img 
-                src={imgMap[highlightedZone]} 
-                alt={`${highlightedZone} zone`} 
+              <img
+                src={imgMap[highlightedZone]}
+                alt={`${highlightedZone} zone`}
                 className="active-zone-visual"
               />
             );
@@ -1475,12 +1417,6 @@ const AiAnalysisView = ({ sessionId, subStep, setSubStep, onBack, onNext, userPr
 };
 
 /* Icons */
-const BrainIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 20C7.59 20 4 16.41 4 12C4 7.59 7.59 4 12 4C16.41 4 20 7.59 20 12C20 16.41 16.41 20 12 20Z" fill="#020617" />
-    <path d="M9.5 9.5C9.5 8.12 10.62 7 12 7C13.38 7 14.5 8.12 14.5 9.5C14.5 10.88 13.38 12 12 12C10.62 12 9.5 10.88 9.5 9.5Z" fill="#020617" />
-  </svg>
-);
 
 /* Icons */
 const TargetIconSmall = () => (
@@ -1830,7 +1766,7 @@ const GeneratingReportModal = ({ isOpen, statusText }) => {
           <div className="otp-header-left">
             <div className="otp-header-shield">
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M10 1.66667L16.85 3.18333C17.0389 3.22778 17.1944 3.32778 17.3166 3.48333C17.4388 3.63889 17.5 3.81111 17.5 4V12.3167C17.5 13.1611 17.3028 13.95 16.9084 14.6833C16.5141 15.4167 15.967 16.0167 15.2672 16.4833L10 20L4.73278 16.4833C4.03297 16.0167 3.48588 15.4167 3.09154 14.6833C2.6972 13.95 2.5 13.1611 2.5 12.3167V4C2.5 3.81111 2.56109 3.63889 2.68328 3.48333C2.80547 3.32778 2.96099 3.22778 3.14983 3.18333L10 1.66667Z" fill="#00E5FF" fillOpacity="0.18"/>
+                <path d="M10 1.66667L16.85 3.18333C17.0389 3.22778 17.1944 3.32778 17.3166 3.48333C17.4388 3.63889 17.5 3.81111 17.5 4V12.3167C17.5 13.1611 17.3028 13.95 16.9084 14.6833C16.5141 15.4167 15.967 16.0167 15.2672 16.4833L10 20L4.73278 16.4833C4.03297 16.0167 3.48588 15.4167 3.09154 14.6833C2.6972 13.95 2.5 13.1611 2.5 12.3167V4C2.5 3.81111 2.56109 3.63889 2.68328 3.48333C2.80547 3.32778 2.96099 3.22778 3.14983 3.18333L10 1.66667Z" fill="#00E5FF" fillOpacity="0.18" />
               </svg>
             </div>
             <div className="otp-header-text">
@@ -1854,9 +1790,11 @@ const GeneratingReportModal = ({ isOpen, statusText }) => {
   );
 };
 
-const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = false, userProfile = {} }) => {
+const ResultsView = ({ sessionId, userProfile = {} }) => {
   const router = useRouter();
   const dispatch = useAppDispatch();
+  const { isAuthenticated, firebaseUser, getIdToken, startPhoneAuth, confirmPhoneOtp } = useAuth();
+  const confirmationRef = React.useRef(null);
   const navigate = (to, options = {}) => {
     if (typeof to === 'number') {
       if (to < 0) {
@@ -1922,133 +1860,109 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const pollUntilReportComplete = async () => {
-    const maxAttempts = 120;
 
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const statusResponse = await dispatch(checkSessionStatusThunk(sessionId)).unwrap();
-      const rawStatus =
-        statusResponse?.data?.status ||
-        statusResponse?.status ||
-        statusResponse?.sessionStatus ||
-        statusResponse?.state ||
-        'PROCESSING';
+  const proceedAfterAuth = async () => {
+    const resolvedName = userInfo.name.trim();
+    const resolvedPhone = userInfo.phone.trim();
+    const resolvedEmail = email.trim();
 
-      const normalizedStatus = String(rawStatus).toUpperCase();
-      setGenerationStatus(normalizedStatus);
+    // 1. Create/fetch the Mongo user (backend keys on firebaseUid).
+    await dispatch(authUserThunk({
+      phone: firebaseUser?.phoneNumber || `+91${resolvedPhone}`,
+      email: resolvedEmail || undefined,
+      authProvider: 'phone',
+    })).unwrap();
 
-      if (['REPORT_COMPLETE', 'COMPLETED', 'ANALYSIS_COMPLETE'].includes(normalizedStatus)) {
-        return true;
-      }
+    // 2. Save lead onto the session — best-effort, never blocks unlock.
+    try {
+      const leadData = {
+        name: resolvedName,
+        phone: resolvedPhone,
+        consentPrivacyPolicy: true,
+        consentToContact: true,
+      };
+      if (resolvedEmail) leadData.email = resolvedEmail;
+      if (city.trim()) leadData.city = city.trim();
 
-      if (['FAILED', 'ERROR', 'REPORT_FAILED', 'ANALYSIS_FAILED'].includes(normalizedStatus)) {
-        throw new Error(`Report generation failed: ${normalizedStatus}`);
-      }
-
-      await wait(5000);
+      await dispatch(saveLeadThunk({ sessionId, leadData })).unwrap();
+    } catch (leadErr) {
+      // Lead is secondary — log and continue to the report.
+      console.warn('Lead save skipped:', leadErr);
     }
 
-    return false;
+    // 3. Report is now unlocked (result route is Firebase-gated).
+    toast.success('Report unlocked. Redirecting...');
+    navigate(`/report?sessionId=${sessionId}`, { replace: true });
   };
 
   const handleLeadSubmit = async () => {
     const errors = {};
     if (!userInfo.name.trim()) errors.name = 'Name is required';
     if (!userInfo.phone.trim()) errors.phone = 'Mobile number is required';
-    
-    // Email is optional, but if entered, should be valid
-    if (email && !/\S+@\S+\.\S+/.test(email)) {
-      errors.email = 'Please enter a valid email address';
-    }
+    if (email && !/\S+@\S+\.\S+/.test(email)) errors.email = 'Please enter a valid email address';
 
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
       setShowFormErrors(true);
       return;
     }
-
-    const resolvedName = userInfo.name.trim();
-    const resolvedPhone = userInfo.phone.trim();
-    const resolvedEmail = email.trim() || `${resolvedPhone}@hairsncare.app`;
-    const resolvedCity = city.trim() || 'NA';
-
     if (!consents.privacy) {
-      toast.warning("Please accept the privacy policy to continue.");
+      toast.warning('Please accept the privacy policy to continue.');
+      return;
+    }
+    if (!sessionId) {
+      toast.error('Session missing. Please restart the assessment.');
       return;
     }
 
     try {
       setIsCreatingLead(true);
 
-      const leadResponse = await dispatch(createLeadThunk({
-        name: resolvedName,
-        phone: resolvedPhone,
-        email: resolvedEmail,
-        city: resolvedCity,
-        sessionId: sessionId,
-        consentPrivacyPolicy: true,
-        consentToContact: true
-      })).unwrap();
-
-      if (leadResponse.success) {
-        setOtpError('');
-        setIsOtpOpen(true);
-        toast.info('OTP sent. Please verify to start report generation.');
-      } else {
-        toast.error(leadResponse.message || "Failed to create lead");
+      // Already signed in → no OTP, straight to unlock.
+      if (isAuthenticated) {
+        await proceedAfterAuth();
+        return;
       }
+
+      // New / signed-out → send Firebase phone OTP.
+      const e164 = `+91${userInfo.phone.trim()}`;
+      confirmationRef.current = await startPhoneAuth(e164);
+      setOtpError('');
+      setIsOtpOpen(true);
+      toast.info('OTP sent to your phone. Enter it to unlock your report.');
     } catch (err) {
-      console.error("Lead creation failed:", err);
-      toast.error("Something went wrong. Please try again.");
+      console.error('Unlock failed:', err);
+      toast.error('Could not start verification. Please try again.');
     } finally {
       setIsCreatingLead(false);
     }
   };
 
   const handleOtpVerify = async (code) => {
+    if (!confirmationRef.current) {
+      setOtpError('Verification session expired. Please resend OTP.');
+      return;
+    }
     try {
-      if (!sessionId) {
-        toast.error('Session not found. Please restart the assessment.');
-        return;
-      }
-
       setOtpError('');
-      setIsGeneratingOpen(false);
       setIsVerifyingOtp(true);
-      const verifyResponse = await dispatch(verifyOtpThunk({ sessionId, otp: code })).unwrap();
-      const successValue = verifyResponse?.success;
-      const isOtpVerified =
-        successValue === true ||
-        successValue === 1 ||
-        String(successValue).toLowerCase() === 'true';
 
-      if (isOtpVerified) {
-        setIsOtpOpen(false);
-        setIsGeneratingOpen(true);
-        setGenerationStatus('OTP_VERIFIED');
+      // Confirm the 6-digit code → signs the user in to Firebase.
+      await confirmPhoneOtp(confirmationRef.current, code);
+      // Ensure the fresh token is ready for the gated result call.
+      await getIdToken(true);
 
-        const isComplete = await pollUntilReportComplete();
-        setIsGeneratingOpen(false);
+      setIsOtpOpen(false);
+      setIsGeneratingOpen(true);
+      setGenerationStatus('VERIFIED');
 
-        if (!isComplete) {
-          toast.error('Report generation is taking longer than expected. Please try again shortly.');
-          return;
-        }
-
-        toast.success('Report generated successfully. Redirecting...');
-        navigate(`/report?sessionId=${sessionId}`, { replace: true });
-        return;
-      }
-
+      await proceedAfterAuth();
       setIsGeneratingOpen(false);
-      const otpFailureMessage = verifyResponse?.message || verifyResponse?.error || 'Invalid OTP. Please try again.';
-      setOtpError(otpFailureMessage);
-      toast.error(otpFailureMessage);
     } catch (error) {
       console.error('OTP verification failed:', error);
       setIsGeneratingOpen(false);
-      setOtpError('OTP verification failed. Please try again.');
-      toast.error('OTP verification failed. Please try again.');
+      setOtpError('Invalid or expired OTP. Please try again.');
+      toast.error('Invalid or expired OTP. Please try again.');
     } finally {
       setIsVerifyingOtp(false);
     }
@@ -2240,9 +2154,9 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
 
                 <div className="res-input-row">
                   <label>Full Name</label>
-                  <input 
-                    type="text" 
-                    placeholder="Your Name" 
+                  <input
+                    type="text"
+                    placeholder="Your Name"
                     value={userInfo.name}
                     onChange={(e) => setUserInfo(prev => ({ ...prev, name: e.target.value }))}
                     className={(showFormErrors && formErrors.name) ? 'input-error' : ''}
@@ -2252,9 +2166,9 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
 
                 <div className="res-input-row">
                   <label>Mobile Number</label>
-                  <input 
-                    type="text" 
-                    placeholder="Your Phone" 
+                  <input
+                    type="text"
+                    placeholder="Your Phone"
                     value={userInfo.phone}
                     onChange={(e) => setUserInfo(prev => ({ ...prev, phone: e.target.value }))}
                     className={(showFormErrors && formErrors.phone) ? 'input-error' : ''}
@@ -2340,12 +2254,10 @@ const ResultsView = ({ sessionId, onBack, onNext, skipPhotosForGeneration = fals
 
         <OtpModal
           isOpen={isOtpOpen}
-          onClose={() => {
-            setIsOtpOpen(false);
-            setOtpError('');
-          }}
+          onClose={() => { setIsOtpOpen(false); setOtpError(''); }}
           onVerify={handleOtpVerify}
           phone={userInfo.phone}
+          otpLength={6}
           isVerifying={isVerifyingOtp}
           errorMessage={otpError}
           onClearError={() => setOtpError('')}
@@ -2415,8 +2327,8 @@ const UploadCardMain = ({ label, status, icon, previewUrl, onDelete, onUpload, s
   };
 
   return (
-    <div 
-      className={`ai-upload-item-card ${previewUrl ? 'has-photo' : ''} ${showError ? 'has-error' : ''}`} 
+    <div
+      className={`ai-upload-item-card ${previewUrl ? 'has-photo' : ''} ${showError ? 'has-error' : ''}`}
       onClick={handleClick}
     >
       <input

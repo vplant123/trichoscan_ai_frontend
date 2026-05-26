@@ -1,4 +1,6 @@
+// src/lib/axiosInstance.js
 import axios from 'axios';
+import { auth } from '@/lib/firebase';
 
 const baseURL = process.env.NEXT_PUBLIC_BASE_URL;
 
@@ -8,13 +10,19 @@ const axiosInstance = axios.create({
 });
 
 axiosInstance.interceptors.request.use(
-  (config) => {
-    if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('hair_assessment_token');
-      if (token) {
-        config.headers = config.headers || {};
-        config.headers.Authorization = `Bearer ${token}`;
+  async (config) => {
+    // Attach a fresh Firebase ID token IF the user is signed in.
+    // Anonymous questionnaire/upload calls simply send no token (public routes).
+    try {
+      if (typeof window !== 'undefined' && auth.currentUser) {
+        const token = await auth.currentUser.getIdToken();
+        if (token) {
+          config.headers = config.headers || {};
+          config.headers.Authorization = `Bearer ${token}`;
+        }
       }
+    } catch (e) {
+      // token fetch failed — proceed without it (public routes still work)
     }
     return config;
   },
@@ -27,7 +35,6 @@ export const toApiErrorMessage = (error) => {
     error?.response?.data?.error ||
     error?.message ||
     'Something went wrong while calling API';
-
   return String(message);
 };
 

@@ -7,10 +7,8 @@ import {
   uploadImage,
   triggerAnalysis,
   checkSessionStatus,
-  createLead,
-  fetchReport,
-  verifyOtp,
-  resendOtp,
+  authUser,
+  saveLead,
 } from '@/app/hair-assessment/HairAssessmentApi';
 import { toApiErrorMessage } from '@/lib/axiosInstance';
 
@@ -93,44 +91,22 @@ export const checkSessionStatusThunk = createAsyncThunk(
   }
 );
 
-export const createLeadThunk = createAsyncThunk(
-  'hairAssessment/createLead',
-  async (leadData, thunkApi) => {
+export const authUserThunk = createAsyncThunk(
+  'hairAssessment/authUser',
+  async (payload, thunkApi) => {
     try {
-      return await createLead(leadData);
+      return await authUser(payload);
     } catch (error) {
       return rejectWithMessage(thunkApi, error);
     }
   }
 );
 
-export const fetchReportThunk = createAsyncThunk(
-  'hairAssessment/fetchReport',
-  async (sessionId, thunkApi) => {
+export const saveLeadThunk = createAsyncThunk(
+  'hairAssessment/saveLead',
+  async ({ sessionId, leadData }, thunkApi) => {
     try {
-      return await fetchReport(sessionId);
-    } catch (error) {
-      return rejectWithMessage(thunkApi, error);
-    }
-  }
-);
-
-export const verifyOtpThunk = createAsyncThunk(
-  'hairAssessment/verifyOtp',
-  async ({ sessionId, otp }, thunkApi) => {
-    try {
-      return await verifyOtp(sessionId, otp);
-    } catch (error) {
-      return rejectWithMessage(thunkApi, error);
-    }
-  }
-);
-
-export const resendOtpThunk = createAsyncThunk(
-  'hairAssessment/resendOtp',
-  async (sessionId, thunkApi) => {
-    try {
-      return await resendOtp(sessionId);
+      return await saveLead(sessionId, leadData);
     } catch (error) {
       return rejectWithMessage(thunkApi, error);
     }
@@ -145,10 +121,8 @@ const trackedThunks = [
   uploadImageThunk,
   triggerAnalysisThunk,
   checkSessionStatusThunk,
-  createLeadThunk,
-  fetchReportThunk,
-  verifyOtpThunk,
-  resendOtpThunk,
+  authUserThunk,
+  saveLeadThunk,
 ];
 
 const initialState = {
