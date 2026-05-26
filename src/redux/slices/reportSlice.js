@@ -1,5 +1,5 @@
 import { createAsyncThunk, createSlice, isAnyOf } from '@reduxjs/toolkit';
-import { checkSessionStatus, fetchFullResult, downloadReport } from '@/app/hair-assessment/HairAssessmentApi';
+import { checkSessionStatus, fetchFullResult } from '@/app/hair-assessment/HairAssessmentApi';
 import { toApiErrorMessage } from '@/lib/axiosInstance';
 
 const rejectWithMessage = (thunkApi, error) => thunkApi.rejectWithValue(toApiErrorMessage(error));
@@ -26,18 +26,8 @@ export const fetchFullResultThunk = createAsyncThunk(
   }
 );
 
-export const downloadReportThunk = createAsyncThunk(
-  'report/downloadReport',
-  async (sessionId, thunkApi) => {
-    try {
-      return await downloadReport(sessionId);
-    } catch (error) {
-      return rejectWithMessage(thunkApi, error);
-    }
-  }
-);
 
-const trackedThunks = [checkSessionStatusThunk, fetchFullResultThunk, downloadReportThunk];
+const trackedThunks = [checkSessionStatusThunk, fetchFullResultThunk];
 
 const reportSlice = createSlice({
   name: 'report',
@@ -91,10 +81,6 @@ export const selectReportLoadingByKey = (state, key) =>
 export const selectReportErrorByKey = (state, key) =>
   state.report?.errors?.[key] ?? null;
 
-export const selectReportDownloadLoading = (state) =>
-  selectReportLoadingByKey(state, 'report/downloadReport');
-export const selectReportDownloadError = (state) =>
-  selectReportErrorByKey(state, 'report/downloadReport');
 export const selectReportDataLoading = (state) =>
   selectReportLoadingByKey(state, 'report/checkSessionStatus') ||
   selectReportLoadingByKey(state, 'report/fetchFullResult');
